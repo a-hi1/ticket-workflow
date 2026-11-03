@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>客服工单工作流 · 7 节点编排</title>
+<meta name="description" content="意图分类 → 条件分流 → 知识库检索 → 兜底判定 → 草稿生成。含批量测试与转人工分支。" />
+<style>
+  :root{
+    --bg:#f6f5f2; --card:#fff; --line:#e6e2da; --line-2:#d8d2c6;
+    --ink:#1e1c19; --ink-2:#5a554d; --ink-3:#8d8679; --ink-4:#b8b1a3;
+    --a:#2f6f5b; --a-soft:#eaf3ef; --warn:#b4762a; --warn-soft:#fdf3e3;
+    --bad:#a8473c; --bad-soft:#fbeeec; --blue:#3c6390;
+    --mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:"PingFang SC","HarmonyOS Sans SC","Hiragino Sans GB","Microsoft YaHei",-apple-system,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:13px;line-height:1.6;
+       -webkit-font-smoothing:antialiased}
+  .top{height:58px;display:flex;align-items:center;gap:14px;padding:0 24px;background:#fff;border-bottom:1px solid var(--line)}
+  .mk{width:28px;height:28px;border-radius:8px;background:var(--a);display:grid;place-items:center;
+      color:#fff;font-family:var(--mono);font-size:11px;font-weight:700}
+  .ttl{font-weight:700;font-size:14px;line-height:1}
+  .sub{display:block;font-family:var(--mono);font-size:8.5px;letter-spacing:.22em;color:var(--ink-3);margin-top:5px}
+  .top .sp{flex:1}
+  .stat{display:flex;gap:18px;font-family:var(--mono);font-size:10.5px;color:var(--ink-3)}
+  .stat b{color:var(--ink-2)}
+  .wrap{display:grid;grid-template-columns:352px 1fr;gap:0;min-height:calc(100vh - 58px)}
+  .flow{padding:22px 20px 30px;border-right:1px solid var(--line);background:#fbfaf8}
+  .flow h3{font-family:var(--mono);font-size:9.5px;letter-spacing:.2em;color:var(--ink-3);
+           text-transform:uppercase;margin-bottom:16px}
+
+  .node{position:relative;background:#fff;border:1.5px solid var(--line-2);border-radius:10px;
+        padding:10px 12px;margin-bottom:0;transition:.25s}
+  .node .nh{display:flex;align-items:center;gap:8px}
+  .node .idx{font-family:var(--mono);font-size:9px;color:var(--ink-4);flex:none}
+  .node .nm{font-size:12.5px;font-weight:700;flex:1}
+  .node .nt{font-family:var(--mono);font-size:8.5px;letter-spacing:.08em;color:var(--ink-4);flex:none}
+  .node .nd{font-size:10.5px;color:var(--ink-3);margin-top:4px;line-height:1.5}
+  .node.on{border-color:var(--warn);box-shadow:0 0 0 3px rgba(180,118,42,.12)}
+  .node.on .nm{color:var(--warn)}
+  .node.done{border-color:var(--line-2);background:#fff}
+  .node.hit{border-color:var(--a);box-shadow:0 0 0 3px rgba(47,111,91,.1)}
+  .node.hit .nm{color:var(--a)}
+  .node.skip{opacity:.42}
+  .node.human{border-color:var(--bad);background:var(--bad-soft)}
+  .node.human .nm{color:var(--bad)}
+
+  .arrow{height:14px;display:flex;justify-content:center;align-items:center;position:relative}
+  .arrow::before{content:"";width:1.5px;height:100%;background:var(--line-2)}
+  .arrow::after{content:"";position:absolute;bottom:0;width:0;height:0;
+    border-left:3.5px solid transparent;border-right:3.5px solid transparent;border-top:5px solid var(--line-2)}
+  .branch{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0}
+  .blabel{font-family:var(--mono);font-size:8.5px;color:var(--ink-4);text-align:center;margin:2px 0 6px;
+          letter-spacing:.06em}
+
+  .main{padding:22px 26px 40px;overflow:auto}
+  .panel{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:16px}
+  .panel h4{font-family:var(--mono);font-size:9.5px;letter-spacing:.2em;color:var(--ink-3);
+            text-transform:uppercase;margin-bottom:12px;font-weight:600}
+  textarea{width:100%;height:64px;resize:none;background:#fbfaf8;border:1px solid var(--line-2);border-radius:8px;
+           color:var(--ink);font-family:var(--sans);font-size:12.5px;padding:9px 11px;line-height:1.6;outline:none}
+  textarea:focus{border-color:var(--a)}
+  .row{display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap}
+  button{font-family:var(--sans);font-size:12.5px;border-radius:8px;padding:9px 16px;cursor:pointer;
+         border:1px solid var(--line-2);background:#fff;color:var(--ink);transition:.16s;font-weight:500}
+  button:hover{border-color:var(--ink-3)}
+  button.pri{background:var(--a);border-color:var(--a);color:#fff;font-weight:600}
+  button.pri:hover{background:#27604e}
+  button:disabled{opacity:.4;cursor:default}
+  .chips{display:flex;gap:6px;flex-wrap:wrap}
+  .chip{font-size:11px;padding:4px 10px;border-radius:99px;background:#f2f0ec;color:var(--ink-2);
+        cursor:pointer;border:1px solid transparent;transition:.15s}
+  .chip:hover{border-color:var(--line-2)}
+
+  .res{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:14px}
+  .kv{background:#fbfaf8;border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+  .kv .k{font-family:var(--mono);font-size:8.5px;letter-spacing:.14em;color:var(--ink-4);text-transform:uppercase}
+  .kv .v{font-size:13px;font-weight:700;margin-top:5px}
+  .kv .v.small{font-size:11.5px;font-weight:500;line-height:1.6}
+  .v.a{color:var(--a)} .v.bad{color:var(--bad)} .v.warn{color:var(--warn)}
+  .draft{margin-top:12px;background:var(--a-soft);border:1px solid #cfe4db;border-radius:9px;padding:12px 14px;
+         font-size:12.5px;line-height:1.75;color:#1f4a3c}
+  .draft b{font-family:var(--mono);font-size:8.5px;letter-spacing:.14em;color:var(--a);display:block;margin-bottom:6px}
+  .draft.human{background:var(--bad-soft);border-color:#f0cfcb;color:#7d332b}
+  .draft.human b{color:var(--bad)}
+
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{text-align:left;font-family:var(--mono);font-size:8.5px;letter-spacing:.14em;color:var(--ink-4);
+     text-transform:uppercase;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600}
+  td{padding:9px 10px;border-bottom:1px solid #f2efe9;vertical-align:top}
+  tr:last-child td{border-bottom:0}
+  .tag{font-size:10px;padding:2px 8px;border-radius:99px;font-family:var(--mono);white-space:nowrap}
+  .tag.ok{background:var(--a-soft);color:var(--a)}
+  .tag.h{background:var(--bad-soft);color:var(--bad)}
+  .tag.no{background:#f2f0ec;color:var(--ink-3)}
+  .tabs{display:flex;gap:4px;margin-bottom:14px}
+  .tab{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);
+       padding:7px 14px;border-radius:7px;cursor:pointer}
+  .tab.on{background:#fff;color:var(--a);box-shadow:0 1px 3px rgba(0,0,0,.06);font-weight:600}
+  @media (max-width:900px){ .wrap{grid-template-columns:1fr} .flow{border-right:0;border-bottom:1px solid var(--line)} }
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="mk">CS</div>
+  <div><div class="ttl">客服工单工作流<small class="sub">7-NODE PIPELINE</small></div></div>
+  <div class="sp"></div>
+  <div class="stat">
+    <span>节点 <b>7</b></span><span>成功率 <b id="rate">—</b></span><span>转人工 <b id="humanN">0</b></span>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="flow">
+    <h3>Workflow</h3>
+    <div class="node" id="n1"><div class="nh"><span class="idx">01</span><span class="nm">开始</span><span class="nt">START</span></div>
+      <div class="nd">入参：工单文本 / 渠道 / 是否 VIP</div></div>
+    <div class="arrow"></div>
+    <div class="node" id="n2"><div class="nh"><span class="idx">02</span><span class="nm">意图分类</span><span class="nt">LLM</span></div>
+      <div class="nd">5 类 · 输出 JSON{class, confidence}</div></div>
+    <div class="arrow"></div>
+    <div class="node" id="n3"><div class="nh"><span class="idx">03</span><span class="nm">条件分支</span><span class="nt">IF</span></div>
+      <div class="nd">class == 商品咨询 ?</div></div>
+    <div class="blabel">商品咨询 ↓　　　　　　　其他类目 ↓</div>
+    <div class="branch">
+      <div>
+        <div class="node" id="n4"><div class="nh"><span class="idx">04</span><span class="nm">知识库检索</span><span class="nt">KB</span></div>
+          <div class="nd">10 条 FAQ · 取 top3</div></div>
+        <div class="arrow"></div>
+        <div class="node" id="n5"><div class="nh"><span class="idx">05</span><span class="nm">兜底判定</span><span class="nt">IF</span></div>
+          <div class="nd">覆盖率 &lt; 0.30 ?</div></div>
+      </div>
+      <div>
+        <div class="node" id="n6"><div class="nh"><span class="idx">06</span><span class="nm">草稿生成</span><span class="nt">LLM</span></div>
+          <div class="nd">≤120 字 · 仅引用原文</div></div>
+      </div>
+    </div>
+    <div class="arrow"></div>
+    <div class="node" id="n7"><div class="nh"><span class="idx">07</span><span class="nm">输出</span><span class="nt">END</span></div>
+      <div class="nd">{class, draft, need_human}</div></div>
+  </div>
+
+  <div class="main">
+    <div class="tabs">
+      <div class="tab on" data-t="single">单条测试</div>
+      <div class="tab" data-t="batch">批量 20 条</div>
+    </div>
+
+    <div id="v-single">
+      <div class="panel">
+        <h4>工单输入</h4>
+        <textarea id="ticket">我买的耳机有杂音，能换吗</textarea>
+        <div class="row">
+          <button class="pri" id="btnRun">运行工作流</button>
+          <button id="btnClear">清空</button>
+          <div class="chips" style="margin-left:auto">
+            <span class="chip" data-s="我买的耳机有杂音，能换吗">正常</span>
+            <span class="chip" data-s="你们的耳机和别家比怎么样，值得买吗">兜底</span>
+            <span class="chip" data-s="什么时候发货">非商品</span>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <h4>执行结果</h4>
+        <div class="res">
+          <div class="kv"><div class="k">分类</div><div class="v" id="rClass">—</div></div>
+          <div class="kv"><div class="k">检索覆盖率</div><div class="v" id="rScore">—</div></div>
+          <div class="kv"><div class="k">是否转人工</div><div class="v" id="rHuman">—</div></div>
+        </div>
+        <div class="draft" id="rDraft"><b>回复草稿</b><span id="rDraftTxt">运行后显示</span></div>
+      </div>
+    </div>
+
+    <div id="v-batch" style="display:none">
+      <div class="panel">
+        <h4>批量测试</h4>
+        <div class="row" style="margin-top:0">
+          <button class="pri" id="btnBatch">跑 20 条样本</button>
+          <span style="font-size:11.5px;color:var(--ink-3)" id="batchInfo">未运行</span>
+        </div>
+      </div>
+      <div class="panel">
+        <h4>结果</h4>
+        <table><thead><tr><th style="width:34%">工单</th><th>分类</th><th>分数</th><th>走向</th></tr></thead>
+        <tbody id="tbody"><tr><td colspan="4" style="color:var(--ink-3);padding:18px 10px">未运行</td></tr></tbody></table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---------- 知识库：10 条 FAQ ---------- */
+  var KB=[
+    {q:"耳机有杂音或一边不响怎么处理", t:"耳机出现杂音或单边无声，多为线材接触或耳塞堵塞。可先更换耳塞、清洁滤网；仍异常可申请换新，需提供订单号。"},
+    {q:"充电宝支持快充吗 输出功率多少", t:"本款充电宝支持 22.5W 快充，兼容 PD 与 QC 协议，可给手机、耳机盒充电。"},
+    {q:"耳机续航时间多久 充电盒能充几次", t:"单次续航 6 小时，配合充电盒总续航约 24 小时，充电盒可补电 3 次。"},
+    {q:"蓝牙耳机能连接两台设备吗 多点连接", t:"支持双设备连接，可在两台已配对设备间切换，切换时另一台会短暂断开音频。"},
+    {q:"手表防水等级 可以游泳吗", t:"手表为 5ATM 防水，可佩戴游泳与淋雨，不建议在热水、桑拿或潜水时使用。"},
+    {q:"耳机配对失败 连不上手机怎么办", t:"配对失败可长按充电盒按键 10 秒重置，再在手机蓝牙列表重新搜索。"},
+    {q:"耳机盒丢了 可以单买充电盒吗", t:"充电盒可单独购买，需提供耳机型号，配件不单独享受整机保修。"},
+    {q:"支持开发票吗 电子发票多久开", t:"下单后可申请电子发票，一般在确认收货后 1-3 个工作日开出。"},
+    {q:"优惠券可以叠加使用吗", t:"平台券与店铺券不可叠加，同类优惠按面额高的优先使用。"},
+    {q:"快递显示签收但没收到怎么办", t:"请先联系快递员确认投递位置；超过 24 小时未找到，可联系客服发起物流核查。"}
+  ];
+
+  /* ---------- 分类规则 ---------- */
+  /* 加权关键词：具体类目权重高，商品咨询作为兜底类 */
+  var CLS=[
+    {n:"投诉建议", w:3, k:["投诉","态度","差评","举报","垃圾","太差"]},
+    {n:"退款退货", w:2, k:["退货","退款","退钱","全额","换货","坏","破","换个颜色"]},
+    {n:"物流查询", w:2, k:["发货","物流","快递","签收","配送","没到","还没到","什么时候到"]},
+    {n:"商品咨询", w:1, k:["耳机","充电宝","手表","续航","防水","快充","配对","连接","参数","功能","适合","音质","降噪","杂音"]}
+  ];
+
+  function classify(text){
+    var best=null, bestScore=0, bestHit=0;
+    for(var i=0;i<CLS.length;i++){
+      var hit=0, kws=CLS[i].k;
+      for(var j=0;j<kws.length;j++) if(text.indexOf(kws[j])>=0) hit++;
+      var sc=hit*CLS[i].w;
+      if(sc>bestScore){ bestScore=sc; best=CLS[i].n; bestHit=hit; }
+    }
+    if(!best) return {cls:"其他", conf:0.50, hit:0};
+    return {cls:best, conf:Math.min(0.95, Math.round((0.58+Math.min(bestHit,4)*0.09)*100)/100), hit:bestHit};
+  }
+
+  /* ---------- 检索打分（字符二元组重合度） ---------- */
+  function bigrams(s){
+    var m={}, i;
+    for(i=0;i<s.length-1;i++){ var g=s.slice(i,i+2); m[g]=(m[g]||0)+1; }
+    return m;
+  }
+  /* 覆盖率：问题里的二元组有多少能在文档中找到 */
+  function score(qa, doc){
+    var a=bigrams(qa), b=bigrams(doc), inter=0, total=0, k;
+    for(k in a) total+=a[k];
+    for(k in a) if(b[k]) inter += Math.min(a[k], b[k]);
+    return total ? inter/total : 0;
+  }
+  function retrieve(q){
+    var arr=KB.map(function(d){ return {doc:d, s:score(q, d.q+" "+d.t)}; });
+    arr.sort(function(x,y){ return y.s-x.s; });
+    return arr;
+  }
+
+  /* ---------- 草稿生成（受限模板） ---------- */
+  function draft(cls, kb, human){
+    if(human) return "已转人工处理。该问题需要进一步核实，客服会在 24 小时内联系您。";
+    if(cls==="商品咨询" && kb) {
+      var body = kb.doc.t;
+      if(body.length>110) body = body.slice(0,110)+"…";
+      return body;
+    }
+    if(cls==="物流查询") return "已为您查询物流进度，包裹正常运输中。若超过预计时间仍未更新，可联系客服发起核查。";
+    if(cls==="退款退货") return "退货可在订单页提交申请，选择原因后按提示寄回。收到商品并验收后原路退款。";
+    if(cls==="投诉建议") return "非常抱歉给您带来不好的体验。您的反馈已记录并转交相关负责人跟进处理。";
+    return "您的问题已收到。为更准确地帮您处理，请补充订单号或具体商品型号。";
+  }
+
+  /* ---------- 节点高亮 ---------- */
+  function clearNodes(){
+    ["n1","n2","n3","n4","n5","n6","n7"].forEach(function(id){
+      var el=document.getElementById(id);
+      if(el) el.className="node";
+    });
+  }
+  function light(id, cls){
+    var el=document.getElementById(id);
+    if(el) el.className="node "+(cls||"");
+  }
+  function sleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+
+  /* ---------- 单条执行 ---------- */
+  var busy=false;
+  async function run(){
+    if(busy) return;
+    busy=true;
+    var btn=document.getElementById("btnRun"); btn.disabled=true;
+    clearNodes();
+    var text=document.getElementById("ticket").value.trim()||"（空）";
+
+    light("n1","on"); await sleep(220); light("n1","done");
+    light("n2","on"); await sleep(320);
+    var c=classify(text);
+    light("n2","done");
+    light("n3","on"); await sleep(260);
+
+    var human=false, top=0, kb=null;
+    document.getElementById("rClass").textContent=c.cls+" · "+c.conf;
+
+    if(c.cls==="商品咨询"){
+      light("n3","hit"); light("n4","on"); await sleep(320);
+      var r=retrieve(text); top=r[0].s;
+      light("n4","done"); light("n5","on"); await sleep(260);
+      document.getElementById("rScore").textContent=top.toFixed(2);
+      if(top<0.30){ human=true; light("n5","human"); light("n6","skip"); }
+      else { kb=r[0]; light("n5","done"); light("n6","on"); await sleep(240); light("n6","done"); }
+    }else{
+      light("n3","done"); light("n4","skip"); light("n5","skip");
+      light("n6","on"); await sleep(300); light("n6","done");
+      document.getElementById("rScore").textContent="—";
+    }
+
+    light("n7","on"); await sleep(200); light("n7","done");
+
+    var hv=document.getElementById("rHuman");
+    hv.textContent = human ? "是" : "否";
+    hv.className = "v " + (human ? "bad" : "a");
+
+    var d=document.getElementById("rDraft"), dt=document.getElementById("rDraftTxt");
+    dt.textContent=draft(c.cls, kb, human);
+    d.className="draft"+(human?" human":"");
+
+    if(human) hv.textContent="是 · 兜底";
+    busy=false; btn.disabled=false;
+  }
+
+  /* ---------- 批量 ---------- */
+  var SAMPLES=[
+    "我买的耳机有杂音，能换吗","这个充电宝支持快充吗","耳机续航到底多久","你们的蓝牙耳机能连两台设备吗",
+    "这款手表防水吗，能戴着游泳吗","什么时候发货","我要退货，怎么操作","客服态度太差了，我要投诉",
+    "你们的耳机和别家比怎么样，值得买吗","这副耳机适不适合给老人用","我昨天下的单还没到","收到货是坏的，我要全额退",
+    "耳机和手机配对一直失败","可以开发票吗","你们公司在哪","优惠券能叠加吗","快递显示签收了但我没收到",
+    "耳机盒丢了能单买吗","我想换个颜色","谢谢你们，问题解决了"
+  ];
+
+  async function batch(){
+    var btn=document.getElementById("btnBatch"); btn.disabled=true;
+    var tb=document.getElementById("tbody"); tb.innerHTML="";
+    var ok=0, human=0;
+    for(var i=0;i<SAMPLES.length;i++){
+      var s=SAMPLES[i], c=classify(s), top=0, h=false, path="";
+      if(c.cls==="商品咨询"){
+        var r=retrieve(s); top=r[0].s;
+        if(top<0.30){ h=true; human++; path="转人工"; }
+        else { ok++; path="检索→生成"; }
+      }else{ ok++; path="直接生成"; }
+      var tr=document.createElement("tr");
+      tr.innerHTML="<td>"+s+"</td><td><span class='tag no'>"+c.cls+"</span></td>"+
+        "<td style='font-family:var(--mono)'>"+(c.cls==="商品咨询"?top.toFixed(2):"—")+"</td>"+
+        "<td><span class='tag "+(h?"h":"ok")+"'>"+path+"</span></td>";
+      tb.appendChild(tr);
+      document.getElementById("batchInfo").textContent="运行中 "+(i+1)+"/"+SAMPLES.length;
+      await sleep(60);
+    }
+    document.getElementById("batchInfo").textContent="完成：成功 "+ok+" 条，转人工 "+human+" 条";
+    document.getElementById("rate").textContent=Math.round(ok/SAMPLES.length*100)+"%";
+    document.getElementById("humanN").textContent=human;
+    btn.disabled=false;
+  }
+
+  /* ---------- 事件 ---------- */
+  document.getElementById("btnRun").onclick=run;
+  document.getElementById("btnClear").onclick=function(){
+    document.getElementById("ticket").value="";
+    clearNodes();
+    ["rClass","rScore","rHuman"].forEach(function(id){ var e=document.getElementById(id); e.textContent="—"; e.className="v"; });
+    document.getElementById("rDraftTxt").textContent="运行后显示";
+    document.getElementById("rDraft").className="draft";
+  };
+  document.getElementById("btnBatch").onclick=batch;
+  document.querySelectorAll(".chip").forEach(function(ch){
+    ch.onclick=function(){ document.getElementById("ticket").value=ch.dataset.s; };
+  });
+  document.querySelectorAll(".tab").forEach(function(t){
+    t.onclick=function(){
+      document.querySelectorAll(".tab").forEach(function(x){x.classList.remove("on")});
+      t.classList.add("on");
+      document.getElementById("v-single").style.display = t.dataset.t==="single"?"":"none";
+      document.getElementById("v-batch").style.display = t.dataset.t==="batch"?"":"none";
+    };
+  });
+})();
+</script>
+</body></html>
